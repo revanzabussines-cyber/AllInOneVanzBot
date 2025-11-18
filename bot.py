@@ -1,13 +1,13 @@
 import os
 import json
+import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta, date
-import logging
 
 from telegram import (
     Update,
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineKeyboardButton,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -18,38 +18,27 @@ from telegram.ext import (
     filters,
 )
 
-# =========================
-# LOGGING
-# =========================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+# ======================================
+# CONFIG
+# ======================================
 
-# =========================
-# KONFIGURASI
-# =========================
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # set di Railway/Render
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("ENV BOT_TOKEN belum di-set!")
+    raise RuntimeError("BOT_TOKEN wajib diisi!")
 
-# GANTI ID ADMIN DENGAN ID TELEGRAM LU
-ADMIN_IDS = {7321522905, 987654321}  # contoh, ganti angka ini
+ADMIN_IDS = {7321522905}  # GANTI ke ID lu
 
-# Limit per user per hari
 MAX_PER_DAY = 100
 
-BASE_DIR = Path(__file__).parent
-PREMIUM_FILE = BASE_DIR / "premium.json"
-HISTORY_FILE = BASE_DIR / "history.json"
-STOK_FILE = BASE_DIR / "stok_akun.txt"
+BASE = Path(__file__).parent
+PREMIUM_FILE = BASE / "premium.json"
+HISTORY_FILE = BASE / "history.json"
+STOK_FILE = BASE / "stok_akun.txt"
 
 
-# =========================
-# HELPER JSON
-# =========================
+# ======================================
+# JSON HELPERS
+# ======================================
 
 def load_json(path: Path, default):
     if not path.exists():
@@ -57,25 +46,21 @@ def load_json(path: Path, default):
     try:
         with path.open("r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        logger.error(f"Gagal baca {path}: {e}")
+    except:
         return default
 
 
 def save_json(path: Path, data):
-    try:
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Gagal simpan {path}: {e}")
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-# =========================
+# ======================================
 # PREMIUM SYSTEM
-# =========================
+# ======================================
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+def is_admin(uid: int):
+    return uid in ADMIN_IDS
 
 
 def get_premium_db():
@@ -86,109 +71,84 @@ def save_premium_db(db):
     save_json(PREMIUM_FILE, db)
 
 
-def is_premium(user_id: int) -> bool:
+def is_premium(uid: int):
     db = get_premium_db()
-    user = db.get(str(user_id))
-    if not user:
-        return False
-    expire_str = user.get("expire_at")
-    if not expire_str:
-        return False
-    try:
-        expire_date = datetime.strptime(expire_str, "%Y-%m-%d").date()
-    except ValueError:
-        return False
-    today = date.today()
-    return today <= expire_date
-
-
-def get_sisa_sewa(user_id: int) -> int:
-    db = get_premium_db()
-    user = db.get(str(user_id))
-    if not user or not user.get("expire_at"):
-        return 0
-    try:
-        expire_date = datetime.strptime(user["expire_at"], "%Y-%m-%d").date()
-    except ValueError:
-        return 0
-    today = date.today()
-    delta = (expire_date - today).days
-    return max(delta, 0)
-
-
-def update_quota(user_id: int) -> dict:
-    """
-    Return user premium record setelah update tanggal dan quota harian.
-    Kalau hari berganti, reset today_count ke 0.
-    """
-    db = get_premium_db()
-    today_str = date.today().strftime("%Y-%m-%d")
-    rec = db.get(str(user_id))
+    rec = db.get(str(uid))
     if not rec:
-        rec = {
-            "expire_at": None,
-            "today_date": today_str,
-            "today_count": 0,
-            "total_generated": 0,
-        }
-    # reset jika hari berganti
-    if rec.get("today_date") != today_str:
-        rec["today_date"] = today_str
+        return False
+    exp = rec.get("expire_at")
+    if not exp:
+        return False
+    exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+    return date.today() <= exp_date
+
+
+def get_sisa_sewa(uid: int):
+    db = get_premium_db()
+    rec = db.get(str(uid), {})
+    exp = rec.get("expire_at")
+    if not exp:
+        return 0
+    exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+    return max((exp_date - date.today()).days, 0)
+
+
+def update_quota(uid: int):
+    today = date.today().strftime("%Y-%m-%d")
+    db = get_premium_db()
+    rec = db.get(str(uid), {
+        "expire_at": None,
+        "today_date": today,
+        "today_count": 0,
+        "total_generated": 0
+    })
+
+    if rec["today_date"] != today:
+        rec["today_date"] = today
         rec["today_count"] = 0
-    db[str(user_id)] = rec
+
+    db[str(uid)] = rec
     save_premium_db(db)
     return rec
 
 
-def increment_quota(user_id: int):
+def increment_quota(uid: int):
     db = get_premium_db()
-    rec = db.get(str(user_id))
+    rec = db.get(str(uid))
     if not rec:
         return
-    rec["today_count"] = rec.get("today_count", 0) + 1
-    rec["total_generated"] = rec.get("total_generated", 0) + 1
-    db[str(user_id)] = rec
+    rec["today_count"] += 1
+    rec["total_generated"] += 1
+    db[str(uid)] = rec
     save_premium_db(db)
 
 
-# =========================
-# HISTORY AKUN
-# =========================
+# ======================================
+# HISTORY SYSTEM
+# ======================================
 
-def get_history_db():
-    return load_json(HISTORY_FILE, {})
+def get_history(uid: int):
+    db = load_json(HISTORY_FILE, {})
+    return db.get(str(uid), [])
 
 
-def save_history_db(db):
+def add_history(uid: int, akun: str):
+    db = load_json(HISTORY_FILE, {})
+    lst = db.get(str(uid), [])
+    lst.append({"akun": akun})
+    db[str(uid)] = lst
     save_json(HISTORY_FILE, db)
 
 
-def add_history(user_id: int, akun: str):
-    db = get_history_db()
-    lst = db.get(str(user_id), [])
-    lst.append({
-        "akun": akun,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    })
-    db[str(user_id)] = lst
-    save_history_db(db)
+# ======================================
+# STOK BOT
+# ======================================
 
-
-def get_user_history(user_id: int):
-    db = get_history_db()
-    return db.get(str(user_id), [])
-
-
-# =========================
-# STOK AKUN
-# =========================
-
-def ambil_satu_akun() -> str | None:
+def ambil_akun():
     if not STOK_FILE.exists():
         return None
-    with STOK_FILE.open("r", encoding="utf-8") as f:
-        lines = [l.strip() for l in f.readlines() if l.strip()]
 
+    lines = [l.strip() for l in STOK_FILE.read_text().splitlines() if l.strip()]
     if not lines:
         return None
 
@@ -196,327 +156,210 @@ def ambil_satu_akun() -> str | None:
     sisa = lines[1:]
 
     with STOK_FILE.open("w", encoding="utf-8") as f:
-        for line in sisa:
-            f.write(line + "\n")
+        for s in sisa:
+            f.write(s + "\n")
 
     return akun
 
 
-def count_stok() -> int:
-    if not STOK_FILE.exists():
-        return 0
-    with STOK_FILE.open("r", encoding="utf-8") as f:
-        return len([l for l in f.readlines() if l.strip()])
+# ======================================
+# UI
+# ======================================
+
+def main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧪 Generate 10 Akun", callback_data="GEN10")],
+        [InlineKeyboardButton("🚀 Generate 20 Akun", callback_data="GEN20")],
+        [InlineKeyboardButton("📦 Riwayat Akun", callback_data="SAVED")],
+        [InlineKeyboardButton("⏳ Sisa Sewa", callback_data="SEWA")],
+        [InlineKeyboardButton("🆘 Bantuan", callback_data="HELP")],
+    ])
 
 
-# =========================
-# KEYBOARD
-# =========================
-
-def main_menu_keyboard():
-    keyboard = [
-        [
-            InlineKeyboardButton("🧪 Generator Akun", callback_data="GEN"),
-        ],
-        [
-            InlineKeyboardButton("📦 Akun yang disimpan", callback_data="SAVED"),
-        ],
-        [
-            InlineKeyboardButton("⏳ Sisa sewa", callback_data="SEWA"),
-        ],
-        [
-            InlineKeyboardButton("🆘 Help / Bantuan", callback_data="HELP"),
-        ],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-
-# =========================
-# HANDLERS
-# =========================
+# ======================================
+# BOT HANDLERS
+# ======================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
-    username = user.username or user.full_name
-
     text = (
-        f"Hai {username} 👋\n"
-        f"ID Telegram kamu: <code>{user_id}</code>\n\n"
-        "Selamat datang di <b>Bot Generator Akun CapCut Kosongan</b> 🧪\n\n"
-        "⚙️ Fitur bot:\n"
-        f"• Limit generate: <b>{MAX_PER_DAY} akun / hari</b>\n"
-        "• Sistem sewa / premium by ID\n"
-        "• Akun sebenernya sudah disiapin sama admin (bukan generate random)\n\n"
-        "Klik tombol di bawah buat mulai pake bot ini. ⬇️"
+        "<b>VANZSTORE.ID — CapCut Generator Bot</b> 🚀\n\n"
+        "⚙️ <b>Fitur:</b>\n"
+        f"• Generate hingga <b>{MAX_PER_DAY} akun/hari</b>\n"
+        "• Sistem akses premium by ID\n"
+        "• Proses cepat & otomatis\n\n"
+        "Gunakan tombol di bawah."
     )
 
-    await update.message.reply_text(
-        text,
-        reply_markup=main_menu_keyboard(),
-        parse_mode="HTML",
-    )
-
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🆘 <b>Bantuan Bot Generator CapCut</b>\n\n"
-        "• /start - buka menu utama\n"
-        "• /help - lihat bantuan ini\n\n"
-        "Khusus admin:\n"
-        "• /addpremium &lt;user_id&gt; &lt;hari&gt; - tambah / perpanjang sewa\n"
-        "• /delpremium &lt;user_id&gt; - hapus akses premium\n"
-        "• /listpremium - lihat daftar premium singkat\n"
-    )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await update.message.reply_text(text, reply_markup=main_keyboard(), parse_mode="HTML")
 
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-    user_id = user.id
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    data = q.data
 
-    data = query.data
-
-    if data == "GEN":
-        await handle_generate(query, user_id)
+    if data == "GEN10":
+        await generate_multiple(q, uid, 10)
+    elif data == "GEN20":
+        await generate_multiple(q, uid, 20)
     elif data == "SAVED":
-        await handle_saved(query, user_id)
+        await show_saved(q, uid)
     elif data == "SEWA":
-        await handle_sewa(query, user_id)
+        await show_sewa(q, uid)
     elif data == "HELP":
-        await handle_help_button(query)
-    else:
-        await query.message.reply_text("Perintah tidak dikenal, coba /start ulang aja bro.")
+        await show_help(q)
 
 
-async def handle_generate(query, user_id: int):
-    # Admin selalu boleh akses
-    if not (is_premium(user_id) or is_admin(user_id)):
-        await query.message.reply_text(
-            "🚫 Kamu belum punya akses premium untuk pakai generator ini.\n"
-            "Silakan hubungi admin buat sewa akses ya."
-        )
+async def generate_multiple(q, uid, jumlah):
+    if not (is_admin(uid) or is_premium(uid)):
+        await q.message.reply_text("🚫 Kamu belum memiliki akses premium.")
         return
 
-    # Cek / update quota harian
-    rec = update_quota(user_id)
-    if not is_admin(user_id):  # admin bebas
-        today_count = rec.get("today_count", 0)
-        if today_count >= MAX_PER_DAY:
-            await query.message.reply_text(
-                f"❌ Limit harian tercapai.\n"
-                f"Kamu sudah generate {MAX_PER_DAY} akun hari ini.\n"
-                "Coba lagi besok ya."
-            )
+    rec = update_quota(uid)
+
+    if not is_admin(uid):
+        sisa = MAX_PER_DAY - rec["today_count"]
+        if sisa <= 0:
+            await q.message.reply_text("❌ Limit harian sudah habis. Coba lagi besok.")
             return
+        if jumlah > sisa:
+            jumlah = sisa
 
-    # Cek stok
-    akun = ambil_satu_akun()
-    if not akun:
-        await query.message.reply_text(
-            "😿 Stok akun CapCut lagi habis.\n"
-            "Tolong kabarin admin supaya diisi lagi."
-        )
+    hasil = []
+
+    for _ in range(jumlah):
+        akun = ambil_akun()
+        if not akun:
+            break
+        hasil.append(akun)
+        increment_quota(uid)
+        add_history(uid, akun)
+
+        # Anti spam delay
+        await asyncio.sleep(0.6)
+
+    if not hasil:
+        await q.message.reply_text("😿 Stok akun habis.")
         return
 
-    # Simpan ke history
-    add_history(user_id, akun)
-    increment_quota(user_id)
+    daftar = "\n".join(f"<code>{a}</code>" for a in hasil)
 
-    sisa_stok = count_stok()
-
-    text = (
-        "✅ Berhasil ngasih 1 akun CapCut buat kamu:\n\n"
-        f"<code>{akun}</code>\n\n"
-        f"⚠️ Jaga baik-baik datanya ya.\n"
-        f"📦 Sisa stok di bot: <b>{sisa_stok}</b> akun."
+    await q.message.reply_text(
+        f"✅ <b>Berhasil mengambil {len(hasil)} akun:</b>\n\n{daftar}",
+        parse_mode="HTML"
     )
-    await query.message.reply_text(text, parse_mode="HTML")
 
 
-async def handle_saved(query, user_id: int):
-    history = get_user_history(user_id)
-    if not history:
-        await query.message.reply_text(
-            "📦 Kamu belum pernah ngambil akun dari bot ini.\n"
-            "Coba klik tombol <b>🧪 Generator Akun</b> dulu.",
-            parse_mode="HTML",
-        )
+async def show_saved(q, uid):
+    hist = get_history(uid)
+    if not hist:
+        await q.message.reply_text("📦 Kamu belum mengambil akun.")
         return
 
-    # Tampilkan max 10 terakhir biar ga kepanjangan
-    last_items = history[-10:]
-    lines = []
-    for idx, item in enumerate(last_items, start=1):
-        lines.append(
-            f"{idx}. <code>{item['akun']}</code>\n   ⏱ {item['time']}"
-        )
+    last = hist[-10:]
+    lines = [f"{i+1}. <code>{h['akun']}</code>" for i, h in enumerate(last)]
 
-    text = "📦 <b>Riwayat akun yang pernah kamu ambil:</b>\n\n" + "\n\n".join(lines)
-    await query.message.reply_text(text, parse_mode="HTML")
-
-
-async def handle_sewa(query, user_id: int):
-    if is_admin(user_id):
-        await query.message.reply_text(
-            "👑 Kamu adalah admin, akses ga dibatasi sewa."
-        )
-        return
-
-    if not is_premium(user_id):
-        await query.message.reply_text(
-            "⏳ Kamu belum punya paket sewa aktif.\n"
-            "Hubungi admin buat beli akses premium."
-        )
-        return
-
-    sisa_hari = get_sisa_sewa(user_id)
-    await query.message.reply_text(
-        f"⏳ Paket sewamu masih aktif.\n"
-        f"Sisa masa aktif: <b>{sisa_hari} hari</b>.",
+    await q.message.reply_text(
+        "📦 <b>Riwayat akun kamu:</b>\n\n" + "\n".join(lines),
         parse_mode="HTML",
     )
 
 
-async def handle_help_button(query):
-    text = (
-        "🆘 <b>Bantuan Singkat</b>\n\n"
-        "• 🧪 <b>Generator Akun</b> → ambil 1 akun CapCut kosongan (butuh premium).\n"
-        "• 📦 <b>Akun yang disimpan</b> → lihat riwayat akun yang pernah kamu ambil.\n"
-        "• ⏳ <b>Sisa sewa</b> → cek masa aktif premium kamu.\n"
-        "• /help → detail bantuan + command admin.\n"
+async def show_sewa(q, uid):
+    if is_admin(uid):
+        await q.message.reply_text("👑 Kamu admin — akses tanpa batas.")
+        return
+
+    if not is_premium(uid):
+        await q.message.reply_text("⏳ Kamu belum memiliki akses premium.")
+        return
+
+    sisa = get_sisa_sewa(uid)
+    await q.message.reply_text(f"⏳ Sisa masa aktif: <b>{sisa} hari</b>.", parse_mode="HTML")
+
+
+async def show_help(q):
+    await q.message.reply_text(
+        "🆘 Bantuan:\n"
+        "• Generate 10/20 akun\n"
+        "• Limit 100 akun/hari\n"
+        "• Premium access\n\n"
+        "Untuk pembelian premium, hubungi admin.",
+        parse_mode="HTML"
     )
-    await query.message.reply_text(text, parse_mode="HTML")
 
 
-# =========================
+# ======================================
 # ADMIN COMMANDS
-# =========================
+# ======================================
 
-async def add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user.id):
+async def addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text(
-            "Format:\n/addpremium <user_id> <hari>\n\nContoh:\n/addpremium 123456789 30"
-        )
+        await update.message.reply_text("Format: /addpremium <user_id> <hari>")
         return
 
-    try:
-        target_id = int(context.args[0])
-        days = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("User ID dan hari harus angka.")
-        return
+    uid = int(context.args[0])
+    hari = int(context.args[1])
 
     db = get_premium_db()
-    rec = db.get(str(target_id), {})
     today = date.today()
-    # kalau sudah ada expire, lanjut dari situ
-    if rec.get("expire_at"):
-        try:
-            old_expire = datetime.strptime(rec["expire_at"], "%Y-%m-%d").date()
-        except ValueError:
-            old_expire = today
+
+    old = db.get(str(uid), {})
+    if old.get("expire_at"):
+        old_exp = datetime.strptime(old["expire_at"], "%Y-%m-%d").date()
     else:
-        old_expire = today
+        old_exp = today
 
-    new_expire = max(old_expire, today) + timedelta(days=days)
-    rec["expire_at"] = new_expire.strftime("%Y-%m-%d")
-    rec.setdefault("today_date", today.strftime("%Y-%m-%d"))
-    rec.setdefault("today_count", 0)
-    rec.setdefault("total_generated", 0)
+    new_expire = max(old_exp, today) + timedelta(days=hari)
 
-    db[str(target_id)] = rec
+    db[str(uid)] = {
+        "expire_at": new_expire.strftime("%Y-%m-%d"),
+        "today_date": today.strftime("%Y-%m-%d"),
+        "today_count": 0,
+        "total_generated": old.get("total_generated", 0)
+    }
+
     save_premium_db(db)
 
     await update.message.reply_text(
-        f"✅ User {target_id} ditandai premium.\n"
-        f"Berlaku sampai: {rec['expire_at']} (tambah {days} hari)."
+        f"✅ Premium user {uid} aktif sampai {new_expire}"
     )
 
 
-async def del_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user.id):
+async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
         return
 
-    if not context.args:
-        await update.message.reply_text("Format:\n/delpremium <user_id>")
-        return
-
-    try:
-        target_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("User ID harus angka.")
-        return
+    uid = context.args[0]
 
     db = get_premium_db()
-    if str(target_id) in db:
-        db.pop(str(target_id))
+    if uid in db:
+        db.pop(uid)
         save_premium_db(db)
-        await update.message.reply_text(f"✅ User {target_id} dihapus dari premium.")
+        await update.message.reply_text("Dihapus dari premium.")
     else:
-        await update.message.reply_text("User tersebut tidak ada di list premium.")
+        await update.message.reply_text("User tidak ditemukan.")
 
 
-async def list_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if not is_admin(user.id):
-        return
-
-    db = get_premium_db()
-    if not db:
-        await update.message.reply_text("Belum ada user premium.")
-        return
-
-    lines = []
-    for uid, rec in db.items():
-        exp = rec.get("expire_at", "-")
-        total = rec.get("total_generated", 0)
-        lines.append(f"• {uid} | exp: {exp} | total: {total}")
-
-    text = "👑 <b>Daftar user premium:</b>\n\n" + "\n".join(lines)
-    await update.message.reply_text(text, parse_mode="HTML")
-
-
-# =========================
-# FALLBACK UNTUK CHAT BIASA
-# =========================
-
-async def echo_non_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Biar kalo orang chat biasa, diarahkan ke /start
-    await update.message.reply_text(
-        "Halo! Gunakan /start untuk buka menu bot ya. 😺"
-    )
-
-
-# =========================
+# ======================================
 # MAIN
-# =========================
+# ======================================
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("addpremium", addpremium))
+    app.add_handler(CommandHandler("delpremium", delpremium))
 
-    # admin
-    app.add_handler(CommandHandler("addpremium", add_premium))
-    app.add_handler(CommandHandler("delpremium", del_premium))
-    app.add_handler(CommandHandler("listpremium", list_premium))
-
-    # buttons
     app.add_handler(CallbackQueryHandler(handle_buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
+                                   lambda u, c: u.message.reply_text("Gunakan menu /start")))
 
-    # non-command messages
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo_non_command))
-
-    logger.info("Bot generator CapCut siap jalan...")
     app.run_polling()
 
 
