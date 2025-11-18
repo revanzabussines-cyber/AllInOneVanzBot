@@ -26,9 +26,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN wajib diisi!")
 
-ADMIN_IDS = {7321522905}  # GANTI ke ID lu
+# GANTI KE ID TELEGRAM LU
+ADMIN_IDS = {7321522905}  # contoh: {123456789}
 
-MAX_PER_DAY = 100
+MAX_PER_DAY = 100  # limit per user per hari
 
 BASE = Path(__file__).parent
 PREMIUM_FILE = BASE / "premium.json"
@@ -183,11 +184,13 @@ def main_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "<b>VANZSTORE.ID — CapCut Generator Bot</b> 🚀\n\n"
+        "Bot ini membantu kamu membuat <b>akun CapCut kosongan</b> secara otomatis, "
+        "siap dipakai buat login, testing, atau kebutuhan lain tanpa ribet daftar manual.\n\n"
         "⚙️ <b>Fitur:</b>\n"
         f"• Generate hingga <b>{MAX_PER_DAY} akun/hari</b>\n"
         "• Sistem akses premium by ID\n"
         "• Proses cepat & otomatis\n\n"
-        "Gunakan tombol di bawah."
+        "Gunakan tombol di bawah untuk mulai generate akun."
     )
 
     await update.message.reply_text(text, reply_markup=main_keyboard(), parse_mode="HTML")
@@ -211,20 +214,36 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_help(q)
 
 
-async def generate_multiple(q, uid, jumlah):
+async def generate_multiple(q, uid, jumlah_awal):
+    # cek akses
     if not (is_admin(uid) or is_premium(uid)):
-        await q.message.reply_text("🚫 Kamu belum memiliki akses premium.")
+        await q.message.reply_text(
+            "🚫 Kamu belum memiliki akses premium.\n"
+            "Silakan hubungi admin untuk aktivasi."
+        )
         return
 
     rec = update_quota(uid)
+    jumlah = jumlah_awal
 
+    # cek limit harian
     if not is_admin(uid):
         sisa = MAX_PER_DAY - rec["today_count"]
         if sisa <= 0:
-            await q.message.reply_text("❌ Limit harian sudah habis. Coba lagi besok.")
+            await q.message.reply_text(
+                "❌ Limit harian kamu sudah habis.\n"
+                "Coba lagi besok."
+            )
             return
         if jumlah > sisa:
-            jumlah = sisa
+            jumlah = sisa  # auto sesuaikan dengan sisa limit
+
+    # kirim notif sedang generate
+    proses_msg = await q.message.reply_text(
+        f"⏳ Sedang meng-generate <b>{jumlah}</b> akun untuk kamu...\n"
+        "Tunggu sebentar, sistem lagi menyiapkan data.",
+        parse_mode="HTML"
+    )
 
     hasil = []
 
@@ -236,17 +255,21 @@ async def generate_multiple(q, uid, jumlah):
         increment_quota(uid)
         add_history(uid, akun)
 
-        # Anti spam delay
+        # anti spam delay
         await asyncio.sleep(0.6)
 
+    # kalau stok habis / tidak dapat akun
     if not hasil:
-        await q.message.reply_text("😿 Stok akun habis.")
+        await proses_msg.edit_text(
+            "😿 Stok akun sedang habis.\n"
+            "Silakan hubungi admin untuk isi ulang stok."
+        )
         return
 
     daftar = "\n".join(f"<code>{a}</code>" for a in hasil)
 
-    await q.message.reply_text(
-        f"✅ <b>Berhasil mengambil {len(hasil)} akun:</b>\n\n{daftar}",
+    await proses_msg.edit_text(
+        f"✅ <b>Berhasil generate {len(hasil)} akun CapCut:</b>\n\n{daftar}",
         parse_mode="HTML"
     )
 
@@ -254,14 +277,14 @@ async def generate_multiple(q, uid, jumlah):
 async def show_saved(q, uid):
     hist = get_history(uid)
     if not hist:
-        await q.message.reply_text("📦 Kamu belum mengambil akun.")
+        await q.message.reply_text("📦 Kamu belum pernah mengambil akun.")
         return
 
-    last = hist[-10:]
-    lines = [f"{i+1}. <code>{h['akun']}</code>" for i, h in enumerate(last)]
+    # TAMPILKAN SEMUA RIWAYAT USER
+    lines = [f"{i+1}. <code>{h['akun']}</code>" for i, h in enumerate(hist)]
 
     await q.message.reply_text(
-        "📦 <b>Riwayat akun kamu:</b>\n\n" + "\n".join(lines),
+        "📦 <b>Riwayat semua akun yang pernah kamu ambil:</b>\n\n" + "\n".join(lines),
         parse_mode="HTML",
     )
 
@@ -276,16 +299,19 @@ async def show_sewa(q, uid):
         return
 
     sisa = get_sisa_sewa(uid)
-    await q.message.reply_text(f"⏳ Sisa masa aktif: <b>{sisa} hari</b>.", parse_mode="HTML")
+    await q.message.reply_text(
+        f"⏳ Sisa masa aktif: <b>{sisa} hari</b>.",
+        parse_mode="HTML"
+    )
 
 
 async def show_help(q):
     await q.message.reply_text(
-        "🆘 Bantuan:\n"
-        "• Generate 10/20 akun\n"
-        "• Limit 100 akun/hari\n"
-        "• Premium access\n\n"
-        "Untuk pembelian premium, hubungi admin.",
+        "🆘 <b>Bantuan singkat:</b>\n\n"
+        "• Gunakan tombol <b>Generate 10/20 Akun</b> untuk membuat akun CapCut kosongan.\n"
+        f"• Setiap user punya limit <b>{MAX_PER_DAY} akun/hari</b>.\n"
+        "• Riwayat akun yang pernah kamu ambil tersimpan di menu <b>Riwayat Akun</b>.\n\n"
+        "Untuk beli / perpanjang akses premium, silakan hubungi admin.",
         parse_mode="HTML"
     )
 
@@ -334,20 +360,28 @@ async def delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
+    if not context.args:
+        await update.message.reply_text("Format: /delpremium <user_id>")
+        return
+
     uid = context.args[0]
 
     db = get_premium_db()
     if uid in db:
         db.pop(uid)
         save_premium_db(db)
-        await update.message.reply_text("Dihapus dari premium.")
+        await update.message.reply_text("✅ User tersebut dihapus dari premium.")
     else:
-        await update.message.reply_text("User tidak ditemukan.")
+        await update.message.reply_text("User tidak ditemukan di list premium.")
 
 
 # ======================================
-# MAIN
+# MAIN & FALLBACK
 # ======================================
+
+async def fallback_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Gunakan /start untuk membuka menu bot ya 😊")
+
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -357,8 +391,7 @@ def main():
     app.add_handler(CommandHandler("delpremium", delpremium))
 
     app.add_handler(CallbackQueryHandler(handle_buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,
-                                   lambda u, c: u.message.reply_text("Gunakan menu /start")))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback_msg))
 
     app.run_polling()
 
